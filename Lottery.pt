@@ -1,0 +1,78 @@
+# Write a lottery smart contract
+# The way this simple lotto works is as follows.
+
+# A ticket costs 0.01 xtz
+# After 5 tickets are sold, a winning ticket is randomly chosen.
+# The purchaser of that ticket is randomly selected and gets all the funds (0.05) collected by the lotto.
+# Lotto restarts
+
+# Notes:
+# Keep a map that maps ticket numbers (keys) to addresses (values).
+# Use 'now' timestamp to get a random value (note this is not truly random and can be gamed in a true lottery). Use that value to select winner.
+# Someone can send more than 0.01 to buy multiple tickets at once. I.e. sending 0.04 will give them 4 tickets.
+# If someone sends more money than number of tickets available, you can either send them back the extra money, or just enter them into the next lottery.
+# You can reject payments that aren't a perfect multiple of the number of tickets.
+
+# Modifications - further exercises:
+# Allow the number of tickets for the lottery to be modified, within some range, before any tickets are sold.
+# Allow the ticket price to be modified, within some range (before any tickets are sold).
+
+import smartpy as sp
+
+class Lottery(sp.Contract):
+    def __init__(self):
+        self.init(totalCount = 5, count = 0, price = 10000, mapTicket = sp.map(), luckDrawed = False, winnerIndex = 0)
+    
+    @sp.entry_point    
+    def buyTicket(self, params):
+        sp.verify(self.data.count < self.data.totalCount)
+        #temp = sp.ediv(sp.amount, self.data.price)
+        someResult = sp.ediv(sp.amount, sp.mutez(self.data.price))
+        sp.verify(someResult.is_some())
+        pairResult = someResult.open_some()
+        buyCount = sp.fst(pairResult)
+        sp.verify(buyCount > 0)
+        
+        buyCount = sp.min(buyCount, sp.as_nat(sp.to_int(self.data.totalCount) - sp.to_int(self.data.count)))
+        
+        # check if the amount is too much, if yes, then send back the money
+        leftOver = sp.amount - sp.mutez(self.data.price * buyCount)
+        
+        # Notice, here must compare to sp.mutez(0) but not 0, because if compare to 0,
+        # then leftOver will be treated as a integer, then the compiler will report error
+        # at last line(cannot minus....), it is not so intuitive error message
+        sp.if leftOver > sp.mutez(0):
+            sp.send(sp.sender, leftOver)
+        
+        #sp.verify(self.data.count + buyCount <= self.data.totalCount)
+        sp.for index in sp.range(self.data.count, self.data.count + buyCount):
+            self.data.mapTicket[index] = sp.sender
+            
+        self.data.count = self.data.count + buyCount
+        
+        # Randomly choose one winner
+        sp.if self.data.count == self.data.totalCount:
+            time = sp.now - sp.timestamp(0)
+            someResult = sp.ediv(time, self.data.totalCount)
+            sp.verify(someResult.is_some())
+            pairResult = someResult.open_some()
+            self.data.winnerIndex = sp.snd(pairResult)
+            sp.send (self.data.mapTicket[self.data.winnerIndex], sp.mutez(self.data.price * self.data.totalCount))
+            self.data.luckDrawed = True
+            
+    def resetContract(self):
+        sp.for index in sp.range(0, sp.totalCount):
+            sp.mapTicket[index] = sp.none
+        
+    @sp.add_test(name = "Test Lottery")
+    def testLottery():
+        scenario = sp.test_scenario()
+        people1 = "tz2AAA"
+        people2 = "tz2BBB"
+        people3 = "tz2CCC"
+        myContract = Lottery()
+        #set the seller and price
+        scenario += myContract
+        scenario += myContract.buyTicket().run(sp.address(people1), amount = sp.mutez(20085))
+        scenario += myContract.buyTicket().run(sp.address(people2), amount = sp.mutez(20000))
+        scenario += myContract.buyTicket().run(sp.address(people3), amount = sp.mutez(50000), now = sp.timestamp_from_utc_now())
